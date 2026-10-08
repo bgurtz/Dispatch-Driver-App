@@ -55,13 +55,14 @@ class TexconDriverApp extends StatelessWidget {
 // ============================================================
 // [SECTION 2: DATA MODELS & DIRECTORIES]
 // ============================================================
-const Map<String, String> gCodes = {
-  'G999': 'G999 (Special/Custom Job)',
-  'Outside Sale': 'Outside Sale',
-  'Other': 'Other Activity',
-  'G1193': 'Texcon Project',
-  'G1200': 'Sample Job B',
-};
+const List<Map<String, String>> gCodeList = [
+  {'code': 'Pugmill', 'label': 'Pugmill'},
+  {'code': 'G999', 'label': 'G999'},
+  {'code': 'Outside Sale', 'label': 'Outside Sale'},
+  {'code': 'Other', 'label': 'Other Activity'},
+  {'code': 'G1193', 'label': 'Texcon Project'},
+  {'code': 'G1200', 'label': 'Sample Job B'},
+];
 
 const List<String> otherOptionsList = [
   'Tire Shop',
@@ -87,7 +88,7 @@ const List<String> otherTaskCodes = [
   '1900',
 ];
 
-const List<String> outsideSaleTmoOptions = [
+const List<String> tmoListOptions = [
   'Other',
   'Time Charge - Time Out of Local Area - Price - Per-Ton',
   'TMO09 - Asphalt Millings',
@@ -198,6 +199,7 @@ class LoadTrip {
   String taskCode;
   String material;
   String fromLocation;
+  String pitName;
   String toLocation;
   String poNumber;
   String otherReason;
@@ -207,6 +209,12 @@ class LoadTrip {
   bool isCompleted;
   bool lunchTaken;
   Duration totalLunchDuration;
+
+  // Track Pugmill Material workflow status
+  bool isPugmillMaterial;
+  DateTime? arrivedAtPitTime;
+  DateTime? scaledOutTime;
+
   final List<TripActivity> activities;
 
   LoadTrip({
@@ -216,6 +224,7 @@ class LoadTrip {
     required this.taskCode,
     required this.material,
     required this.fromLocation,
+    this.pitName = '',
     required this.toLocation,
     this.poNumber = '',
     this.otherReason = '',
@@ -225,16 +234,26 @@ class LoadTrip {
     this.isCompleted = false,
     this.lunchTaken = false,
     this.totalLunchDuration = Duration.zero,
+    this.isPugmillMaterial = false,
+    this.arrivedAtPitTime,
+    this.scaledOutTime,
     List<TripActivity>? activities,
   }) : activities = activities ?? [TripActivity(title: 'Load Started', startTime: startTime, endTime: startTime)];
 
   Duration get duration => (endTime ?? DateTime.now()).difference(startTime);
   bool get isAsphaltTask => taskCode.toLowerCase().contains('asphalt');
+
+  String get routeDisplay {
+    if (isPugmillMaterial) {
+      final pitInfo = pitName.isNotEmpty ? ' - $pitName (Pugmill)' : ' (Pugmill)';
+      return '$fromLocation$pitInfo ➔ $toLocation';
+    }
+    return '$fromLocation ➔ $gCode - $toLocation';
+  }
 }
 
 class GeofenceServicePlaceholder {
   static void initializeGeofence() {}
-
   static void checkLocationAndPromptMap(BuildContext context, String locationName) {
     showDialog(
       context: context,
@@ -310,7 +329,6 @@ class _MainDriverScreenState extends State<MainDriverScreen> {
   int currentTabIndex = 0;
   bool isClockedIn = false;
   DateTime? clockInTime;
-
   bool isPreTripInProgress = false;
   bool isPreTripCompleted = false;
   DateTime? preTripStartTime;
@@ -319,7 +337,6 @@ class _MainDriverScreenState extends State<MainDriverScreen> {
   DateTime? postTripStartTime;
   String currentTruck = '245';
   String currentTrailer = '781';
-
   LoadTrip? activeLoad;
   TripActivity? activeTimedEvent;
   bool isLunchInProgress = false;
@@ -471,9 +488,7 @@ class _MainDriverScreenState extends State<MainDriverScreen> {
     setState(() {
       currentTruck = newTruckVal;
       currentTrailer = newTrailerVal;
-
       if (activeLoad != null) {
-        // Active load running -> Log swap as an activity on the active load details
         activeLoad!.activities.add(
           TripActivity(
             title: 'Equipment Swap',
@@ -483,7 +498,6 @@ class _MainDriverScreenState extends State<MainDriverScreen> {
           ),
         );
       } else {
-        // Between loads -> Log swap on the main daily screen log
         chronologicalLog.add(DailyLogEntry(
           type: LogEntryType.equipmentSwap,
           startTime: now,
@@ -492,7 +506,6 @@ class _MainDriverScreenState extends State<MainDriverScreen> {
           endingMileage: endingMilesController.text.trim(),
           details: 'Post-Trip for Equipment Swap',
         ));
-
         chronologicalLog.add(DailyLogEntry(
           type: LogEntryType.equipmentSwap,
           startTime: now,
@@ -519,6 +532,7 @@ class _MainDriverScreenState extends State<MainDriverScreen> {
     } else {
       final miles = await askText('Enter Beginning Mileage', isNumber: true);
       if (!mounted || miles == null || miles.isEmpty) return;
+
       final now = DateTime.now();
       final preTripLog = DailyLogEntry(
         type: LogEntryType.preTrip,
@@ -528,11 +542,13 @@ class _MainDriverScreenState extends State<MainDriverScreen> {
         startingMileage: miles,
         details: 'Initial Pre-Trip Inspection',
       );
+
       setState(() {
         isPreTripInProgress = false;
         isPreTripCompleted = true;
         chronologicalLog.add(preTripLog);
       });
+
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Pre-Trip Completed & Logged.')));
     }
   }
@@ -544,6 +560,7 @@ class _MainDriverScreenState extends State<MainDriverScreen> {
       );
       return;
     }
+
     if (!isPostTripInProgress) {
       setState(() {
         isPostTripInProgress = true;
@@ -553,6 +570,7 @@ class _MainDriverScreenState extends State<MainDriverScreen> {
     } else {
       final miles = await askText('Enter Ending Mileage', isNumber: true);
       if (!mounted || miles == null || miles.isEmpty) return;
+
       final now = DateTime.now();
       final postTripLog = DailyLogEntry(
         type: LogEntryType.postTrip,
@@ -562,12 +580,14 @@ class _MainDriverScreenState extends State<MainDriverScreen> {
         endingMileage: miles,
         details: 'End of Shift Post-Trip Inspection',
       );
+
       setState(() {
         isPostTripInProgress = false;
         isPostTripCompleted = true;
         isClockedIn = false;
         chronologicalLog.add(postTripLog);
       });
+
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Post-Trip Completed. Shift finished!')));
     }
   }
@@ -626,72 +646,212 @@ class _MainDriverScreenState extends State<MainDriverScreen> {
       return;
     }
 
-    final selectedG = await chooseOption('Select G-Code', [for (final k in gCodes.keys) '$k - ${gCodes[k]}']);
-    if (!mounted || selectedG == null) return;
-    final code = selectedG.split(' - ').first;
+    final gOptions = gCodeList.map((item) {
+      return item['code'] == 'G999' ? 'G999' : '${item['code']} - ${item['label']}';
+    }).toList();
 
-    String jobName = gCodes[code] ?? code;
+    final selectedG = await chooseOption('Select G-Code', gOptions);
+    if (!mounted || selectedG == null) return;
+
+    final code = selectedG.contains(' - ') ? selectedG.split(' - ').first : selectedG.trim();
+    String jobName = '';
     String poNumber = '';
     String otherReason = '';
     String task = '';
+    String material = '';
+    String from = '';
+    String pitName = '';
+    String to = '';
+    bool isPugMaterial = false;
 
     if (code == 'G999') {
-      final inputJob = await askText('Enter Job Name for G999', hintText: 'Job Name (if available)');
-      if (inputJob != null && inputJob.isNotEmpty) jobName = inputJob;
-      final selectedTask = await chooseOption('Select Task Code', standardTaskCodes);
-      if (!mounted || selectedTask == null) return;
-      task = selectedTask;
-    } else if (code == 'Outside Sale') {
-      final inputCustomer = await askText('Enter Customer/Job Name', hintText: 'Customer or Job Name');
-      if (inputCustomer != null && inputCustomer.isNotEmpty) jobName = inputCustomer;
+      final inputJob = await askText('Enter Job Name for G999', hintText: 'Job Name');
+      if (!mounted || inputJob == null || inputJob.isEmpty) return;
+      jobName = inputJob;
 
-      final selectedTmo = await chooseOption('Select TMO / Rate', outsideSaleTmoOptions);
-      if (!mounted || selectedTmo == null) return;
+      final poInput = await askText('Enter PO Number', hintText: 'PO Number');
+      if (poInput != null) poNumber = poInput;
 
-      if (selectedTmo == 'Other') {
-        final customTmo = await askText('Enter TMO Number or Material', hintText: 'e.g. TMO99 - Custom Material');
-        if (!mounted || customTmo == null || customTmo.isEmpty) return;
-        task = customTmo;
+      final selectedMaterial = await chooseOption('Select Material (TMO)', tmoListOptions);
+      if (!mounted || selectedMaterial == null) return;
+      if (selectedMaterial == 'Other') {
+        final customMat = await askText('Enter Material / TMO');
+        if (!mounted || customMat == null || customMat.isEmpty) return;
+        material = customMat;
       } else {
-        task = selectedTmo;
+        material = selectedMaterial;
       }
+
+      final startLoc = await askText('Enter Starting Location');
+      if (!mounted || startLoc == null || startLoc.isEmpty) return;
+      from = startLoc;
+
+      final custLoc = await askText('Enter Customer Location');
+      if (!mounted || custLoc == null || custLoc.isEmpty) return;
+      to = custLoc;
+      task = 'Custom Job';
+    } else if (code == 'Pugmill') {
+      jobName = 'Pugmill Operations';
+      final pugType = await chooseOption('Select Pugmill Type', ['Onsite', 'Material']);
+      if (!mounted || pugType == null) return;
+
+      if (pugType == 'Material') {
+        isPugMaterial = true;
+        task = 'Inbound Material';
+
+        // 1. Select TMO Number
+        final selectedMaterial = await chooseOption('Select TMO Number', tmoListOptions);
+        if (!mounted || selectedMaterial == null) return;
+        if (selectedMaterial == 'Other') {
+          final customMat = await askText('Enter TMO Number or Material');
+          if (!mounted || customMat == null || customMat.isEmpty) return;
+          material = customMat;
+        } else {
+          material = selectedMaterial;
+        }
+
+        // 2. PO Number
+        final poInput = await askText('Enter PO Number', hintText: 'PO Number');
+        if (poInput != null) poNumber = poInput;
+
+        // 3. Starting Location
+        final startChoice = await chooseOption('Starting Location', ['Yard', 'Quarry', 'Plant', 'Other']);
+        if (!mounted || startChoice == null) return;
+        if (startChoice == 'Other') {
+          final customStart = await askText('Enter Starting Location Name');
+          if (!mounted || customStart == null || customStart.isEmpty) return;
+          from = customStart;
+        } else {
+          from = startChoice;
+        }
+
+        // 4. Pit Name
+        final pitInput = await askText('Enter Pit Name', hintText: 'Pit Name');
+        if (pitInput != null && pitInput.isNotEmpty) pitName = pitInput;
+
+        to = 'Pugmill';
+      } else {
+        final onsiteChoice = await chooseOption('Select Onsite Task', ['Sand', 'Move Material']);
+        if (!mounted || onsiteChoice == null) return;
+        task = onsiteChoice;
+        material = onsiteChoice;
+        from = 'Pugmill';
+        to = 'Pugmill';
+      }
+    } else if (code == 'Outside Sale') {
+      final inputJob = await askText('Enter Job Name', hintText: 'Job Name');
+      if (!mounted || inputJob == null || inputJob.isEmpty) return;
+      jobName = inputJob;
+
+      final selectedTmo = await chooseOption('Select TMO', tmoListOptions);
+      if (!mounted || selectedTmo == null) return;
+      if (selectedTmo == 'Other') {
+        final customTmo = await askText('Enter TMO Number / Description');
+        if (!mounted || customTmo == null || customTmo.isEmpty) return;
+        material = customTmo;
+      } else {
+        material = selectedTmo;
+      }
+
+      task = 'Outside Sale';
+      final poInput = await askText('Enter PO Number (Optional)', hintText: 'Leave blank if unavailable');
+      if (poInput != null) poNumber = poInput;
+
+      final startChoice = await chooseOption('Starting Location', ['Pugmill', 'Quarry', 'Yard', 'Other']);
+      if (!mounted || startChoice == null) return;
+      if (startChoice == 'Other') {
+        final customStart = await askText('Enter Starting Location');
+        if (!mounted || customStart == null || customStart.isEmpty) return;
+        from = customStart;
+      } else {
+        from = startChoice;
+      }
+
+      final deliveryType = await chooseOption('Delivery Location', ['Customer Site']);
+      if (!mounted || deliveryType == null) return;
+      final customDelivery = await askText('Enter Customer Site Address / Location Name');
+      if (!mounted || customDelivery == null || customDelivery.isEmpty) return;
+      to = customDelivery;
     } else if (code == 'Other') {
       final selectedOther = await chooseOption('Select Other Activity', otherOptionsList);
       if (!mounted || selectedOther == null) return;
+
       if (selectedOther == 'Custom Entry...') {
         final typed = await askText('Enter Activity Details');
         if (typed != null && typed.isNotEmpty) otherReason = typed;
       } else {
         otherReason = selectedOther;
       }
-      jobName = 'Other: $otherReason';
 
+      jobName = 'Other: $otherReason';
       final selectedOtherTask = await chooseOption('Select Task Code', otherTaskCodes);
       if (!mounted || selectedOtherTask == null) return;
       task = selectedOtherTask;
+
+      final poInput = await askText('Enter PO Number (Optional)', hintText: 'Leave blank if unavailable');
+      if (poInput != null) poNumber = poInput;
+
+      final matInput = await askText('Material Name');
+      if (!mounted || matInput == null || matInput.isEmpty) return;
+      material = matInput;
+
+      final startChoice = await chooseOption('Starting Location', ['Pugmill', 'Quarry', 'Yard', 'Other']);
+      if (!mounted || startChoice == null) return;
+      if (startChoice == 'Other') {
+        final customStart = await askText('Enter Starting Location');
+        if (!mounted || customStart == null || customStart.isEmpty) return;
+        from = customStart;
+      } else {
+        from = startChoice;
+      }
+
+      final endChoice = await chooseOption('Delivery Location', ['Yard', 'Plant', 'Customer Site', 'Other']);
+      if (!mounted || endChoice == null) return;
+      if (endChoice == 'Other') {
+        final customEnd = await askText('Enter Delivery Location');
+        if (!mounted || customEnd == null || customEnd.isEmpty) return;
+        to = customEnd;
+      } else {
+        to = endChoice;
+      }
     } else {
+      // Standard G-Code logic (e.g., G1193, G1200)
+      final matchedItem = gCodeList.firstWhere((e) => e['code'] == code, orElse: () => {'code': code, 'label': code});
+      jobName = matchedItem['label']!;
+
       final selectedTask = await chooseOption('Select Task Code', standardTaskCodes);
       if (!mounted || selectedTask == null) return;
       task = selectedTask;
+
+      final matInput = await askText('Material Name (e.g., Flex Base, Sand)');
+      if (!mounted || matInput == null || matInput.isEmpty) return;
+      material = matInput;
+
+      final startChoice = await chooseOption('Starting Location', ['Pugmill', 'Quarry', 'Yard', 'Other']);
+      if (!mounted || startChoice == null) return;
+      if (startChoice == 'Other') {
+        final customStart = await askText('Enter Starting Location');
+        if (!mounted || customStart == null || customStart.isEmpty) return;
+        from = customStart;
+      } else {
+        from = startChoice;
+      }
+
+      // Bypass Delivery Location prompt for codes starting with 'G'
+      if (code.toUpperCase().startsWith('G')) {
+        to = jobName;
+      } else {
+        final endChoice = await chooseOption('Delivery Location', ['Yard', 'Plant', 'Customer Site', 'Other']);
+        if (!mounted || endChoice == null) return;
+        if (endChoice == 'Other') {
+          final customEnd = await askText('Enter Delivery Location');
+          if (!mounted || customEnd == null || customEnd.isEmpty) return;
+          to = customEnd;
+        } else {
+          to = endChoice;
+        }
+      }
     }
-
-    if (code == 'G999' || code == 'Outside Sale' || code == 'Other') {
-      final poInput = await askText('Enter PO Number (Optional)', hintText: 'Leave blank if unavailable');
-      if (poInput != null) poNumber = poInput;
-    }
-
-    final material = await askText('Material Name (e.g., Flex Base, Sand)');
-    if (!mounted || material == null || material.isEmpty) return;
-
-    final from = await chooseOption('Starting Location', ['Pugmill', 'Quarry', 'Yard', 'Other']);
-    if (!mounted || from == null) return;
-
-    String? to = gCodes[code];
-    if (task == 'Outside Sale' || code == 'Outside Sale' || code == 'Other') {
-      to = await chooseOption('Delivery Location', ['Yard', 'Plant', 'Customer Site', 'Other']);
-      if (!mounted) return;
-    }
-    to ??= 'Site Location';
 
     final now = DateTime.now();
     final loadCount = chronologicalLog.where((e) => e.type == LogEntryType.loadTrip).length + 1;
@@ -702,10 +862,12 @@ class _MainDriverScreenState extends State<MainDriverScreen> {
       taskCode: task,
       material: material,
       fromLocation: from,
+      pitName: pitName,
       toLocation: to,
       poNumber: poNumber,
       otherReason: otherReason,
       startTime: now,
+      isPugmillMaterial: isPugMaterial,
     );
 
     final logEntry = DailyLogEntry(
@@ -721,6 +883,35 @@ class _MainDriverScreenState extends State<MainDriverScreen> {
     });
   }
 
+  void markArrivedAtPit() {
+    if (activeLoad == null) return;
+    final now = DateTime.now();
+    setState(() {
+      activeLoad!.arrivedAtPitTime = now;
+      activeLoad!.activities.add(TripActivity(
+        title: 'Arrived at Pit',
+        startTime: now,
+        endTime: now,
+        notes: activeLoad!.pitName.isNotEmpty ? 'Pit: ${activeLoad!.pitName}' : '',
+      ));
+    });
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Arrived at Pit logged.')));
+  }
+
+  void markScaledOut() {
+    if (activeLoad == null) return;
+    final now = DateTime.now();
+    setState(() {
+      activeLoad!.scaledOutTime = now;
+      activeLoad!.activities.add(TripActivity(
+        title: 'Scaled Out',
+        startTime: now,
+        endTime: now,
+      ));
+    });
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Scaled Out logged.')));
+  }
+
   void completeActiveLoad() {
     if (activeLoad == null || activeTimedEvent != null || isLunchInProgress) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -728,6 +919,7 @@ class _MainDriverScreenState extends State<MainDriverScreen> {
       );
       return;
     }
+
     final now = DateTime.now();
     setState(() {
       activeLoad!.endTime = now;
@@ -756,8 +948,13 @@ class _MainDriverScreenState extends State<MainDriverScreen> {
     if (!mounted || reason == null) return;
 
     String note = reason;
-    final extra = await askText('Additional Details (Optional)');
-    if (extra != null && extra.isNotEmpty) note = '$note - $extra';
+    if (reason == 'Other') {
+      final extraOther = await askText('Enter Delay Reason');
+      if (extraOther != null && extraOther.isNotEmpty) note = extraOther;
+    } else {
+      final extra = await askText('Additional Details (Optional)');
+      if (extra != null && extra.isNotEmpty) note = '$note - $extra';
+    }
 
     startTimedEvent('Load Delay', note);
   }
@@ -790,6 +987,7 @@ class _MainDriverScreenState extends State<MainDriverScreen> {
       startTime: DateTime.now(),
       notes: note,
     );
+
     setState(() {
       activeTimedEvent = event;
       if (activeLoad != null) {
@@ -816,6 +1014,7 @@ class _MainDriverScreenState extends State<MainDriverScreen> {
 
   Future<void> handleLunchToggle() async {
     final now = DateTime.now();
+
     if (!isLunchInProgress) {
       final confirm = await showDialog<bool>(
         context: context,
@@ -832,6 +1031,7 @@ class _MainDriverScreenState extends State<MainDriverScreen> {
       if (confirm != true) return;
 
       final lunchActivity = TripActivity(title: 'Lunch Break', startTime: now);
+
       setState(() {
         isLunchInProgress = true;
         lunchStartTime = now;
@@ -847,6 +1047,7 @@ class _MainDriverScreenState extends State<MainDriverScreen> {
           ));
         }
       });
+
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Lunch Break Started.')));
     } else {
       final confirm = await showDialog<bool>(
@@ -875,6 +1076,7 @@ class _MainDriverScreenState extends State<MainDriverScreen> {
       if (lunchActivity != null) {
         lunchActivity.endTime = now;
         final duration = lunchActivity.duration;
+
         setState(() {
           isLunchInProgress = false;
           isLunchTakenToday = true;
@@ -884,21 +1086,25 @@ class _MainDriverScreenState extends State<MainDriverScreen> {
           }
         });
       }
+
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Lunch Break Ended & Logged.')));
     }
   }
 
   Future<void> editTripField(LoadTrip trip) async {
-    final fieldToEdit = await chooseOption('Select Field to Edit', [
+    final fields = [
       'Truck / Trailer #',
       'G-Code',
       'Task Code',
       'Material',
       'Pick-Up Location',
-      'Delivery Location',
+      if (trip.isPugmillMaterial) 'Pit Name',
+      if (!trip.gCode.toUpperCase().startsWith('G')) 'Delivery Location',
       'PO Number',
       'Notes',
-    ]);
+    ];
+
+    final fieldToEdit = await chooseOption('Select Field to Edit', fields);
     if (!mounted || fieldToEdit == null) return;
 
     switch (fieldToEdit) {
@@ -909,12 +1115,17 @@ class _MainDriverScreenState extends State<MainDriverScreen> {
         if (tr != null && tr.isNotEmpty) setState(() => currentTrailer = tr);
         break;
       case 'G-Code':
-        final g = await chooseOption('Select New G-Code', [for (final k in gCodes.keys) '$k - ${gCodes[k]}']);
+        final gOptions = gCodeList.map((item) => item['code'] == 'G999' ? 'G999' : '${item['code']} - ${item['label']}').toList();
+        final g = await chooseOption('Select New G-Code', gOptions);
         if (g != null) {
-          final code = g.split(' - ').first;
+          final code = g.contains(' - ') ? g.split(' - ').first : g.trim();
           setState(() {
             trip.gCode = code;
-            trip.jobName = gCodes[code] ?? code;
+            final match = gCodeList.firstWhere((e) => e['code'] == code, orElse: () => {'label': code});
+            trip.jobName = match['label']!;
+            if (code.toUpperCase().startsWith('G')) {
+              trip.toLocation = trip.jobName;
+            }
           });
         }
         break;
@@ -923,7 +1134,7 @@ class _MainDriverScreenState extends State<MainDriverScreen> {
           final task = await chooseOption('Select New Task Code', otherTaskCodes);
           if (task != null) setState(() => trip.taskCode = task);
         } else if (trip.gCode == 'Outside Sale') {
-          final task = await chooseOption('Select TMO / Rate', outsideSaleTmoOptions);
+          final task = await chooseOption('Select TMO / Rate', tmoListOptions);
           if (task != null) {
             if (task == 'Other') {
               final custom = await askText('Enter TMO Number or Material');
@@ -943,11 +1154,29 @@ class _MainDriverScreenState extends State<MainDriverScreen> {
         break;
       case 'Pick-Up Location':
         final loc = await chooseOption('Select Pick-Up Location', ['Pugmill', 'Quarry', 'Yard', 'Other']);
-        if (loc != null) setState(() => trip.fromLocation = loc);
+        if (loc != null) {
+          if (loc == 'Other') {
+            final custom = await askText('Enter Pick-Up Location');
+            if (custom != null && custom.isNotEmpty) setState(() => trip.fromLocation = custom);
+          } else {
+            setState(() => trip.fromLocation = loc);
+          }
+        }
+        break;
+      case 'Pit Name':
+        final pit = await askText('Enter Pit Name', initialValue: trip.pitName);
+        if (pit != null) setState(() => trip.pitName = pit);
         break;
       case 'Delivery Location':
         final loc = await chooseOption('Select Delivery Location', ['Yard', 'Plant', 'Customer Site', 'Other']);
-        if (loc != null) setState(() => trip.toLocation = loc);
+        if (loc != null) {
+          if (loc == 'Other' || loc == 'Customer Site') {
+            final custom = await askText('Enter Delivery Location');
+            if (custom != null && custom.isNotEmpty) setState(() => trip.toLocation = custom);
+          } else {
+            setState(() => trip.toLocation = loc);
+          }
+        }
         break;
       case 'PO Number':
         final po = await askText('Enter PO Number', initialValue: trip.poNumber);
@@ -1000,7 +1229,6 @@ class _MainDriverScreenState extends State<MainDriverScreen> {
           ),
         ),
         const SizedBox(height: 12),
-
         if (!isClockedIn)
           FilledButton.icon(
             onPressed: () => setState(() {
@@ -1105,7 +1333,6 @@ class _MainDriverScreenState extends State<MainDriverScreen> {
             ),
           ),
           const SizedBox(height: 16),
-
           if (activeLoad != null) ...[
             const Text('Active Trip in Progress', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
             const SizedBox(height: 8),
@@ -1118,6 +1345,40 @@ class _MainDriverScreenState extends State<MainDriverScreen> {
               onEdit: () => editTripField(activeLoad!),
             ),
             const SizedBox(height: 12),
+            if (activeLoad!.isPugmillMaterial) ...[
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: activeLoad!.arrivedAtPitTime != null ? null : markArrivedAtPit,
+                      style: OutlinedButton.styleFrom(
+                        side: BorderSide(color: activeLoad!.arrivedAtPitTime != null ? Colors.grey : TexconColors.blue),
+                      ),
+                      icon: Icon(Icons.location_on, color: activeLoad!.arrivedAtPitTime != null ? Colors.grey : TexconColors.blue, size: 16),
+                      label: Text(
+                        activeLoad!.arrivedAtPitTime != null ? 'PIT ARRIVED' : 'ARRIVED AT PIT',
+                        style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: activeLoad!.scaledOutTime != null ? null : markScaledOut,
+                      style: OutlinedButton.styleFrom(
+                        side: BorderSide(color: activeLoad!.scaledOutTime != null ? Colors.grey : TexconColors.orange),
+                      ),
+                      icon: Icon(Icons.scale, color: activeLoad!.scaledOutTime != null ? Colors.grey : TexconColors.orange, size: 16),
+                      label: Text(
+                        activeLoad!.scaledOutTime != null ? 'SCALED OUT' : 'SCALE OUT',
+                        style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+            ],
             FilledButton.icon(
               onPressed: (activeTimedEvent != null || isLunchInProgress) ? null : completeActiveLoad,
               icon: const Icon(Icons.check_circle),
@@ -1147,7 +1408,6 @@ class _MainDriverScreenState extends State<MainDriverScreen> {
               label: const Text('START NEW LOAD', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
             ),
           ],
-
           const SizedBox(height: 16),
           Row(
             children: [
@@ -1175,6 +1435,7 @@ class _MainDriverScreenState extends State<MainDriverScreen> {
 
   Widget buildDailyHistoryTab() {
     final completedLoadsCount = chronologicalLog.where((e) => e.type == LogEntryType.loadTrip && e.loadTripData != null && e.loadTripData!.isCompleted).length;
+
     return Column(
       children: [
         Container(
@@ -1486,14 +1747,14 @@ class LoadCard extends StatelessWidget {
               ),
               const SizedBox(height: 6),
               InkWell(
-                onTap: () => GeofenceServicePlaceholder.checkLocationAndPromptMap(context, '${trip.fromLocation} to ${trip.toLocation}'),
+                onTap: () => GeofenceServicePlaceholder.checkLocationAndPromptMap(context, trip.routeDisplay),
                 child: Row(
                   children: [
                     const Icon(Icons.map, size: 18, color: TexconColors.blue),
                     const SizedBox(width: 4),
                     Expanded(
                       child: Text(
-                        '${trip.fromLocation} ➔ ${trip.gCode} - ${trip.toLocation}',
+                        trip.routeDisplay,
                         style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: TexconColors.blue, decoration: TextDecoration.underline),
                         overflow: TextOverflow.ellipsis,
                       ),
@@ -1536,6 +1797,7 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
         ],
       ),
     );
+
     if (!mounted || note == null) return;
     setState(() => act.notes = note);
     widget.onTripUpdated();
@@ -1560,11 +1822,13 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
                   Text('${widget.trip.gCode} - ${widget.trip.jobName}', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: TexconColors.darkBlue)),
                   const SizedBox(height: 4),
                   Text('Task: ${widget.trip.taskCode}  |  Material: ${widget.trip.material}'),
-                  Text('Route: ${widget.trip.fromLocation} ➔ ${widget.trip.gCode} - ${widget.trip.toLocation}'),
+                  Text('Route: ${widget.trip.routeDisplay}'),
                   if (widget.trip.poNumber.isNotEmpty) Text('PO #: ${widget.trip.poNumber}', style: const TextStyle(fontWeight: FontWeight.bold)),
                   if (widget.trip.notes.isNotEmpty) Text('Notes: ${widget.trip.notes}', style: const TextStyle(fontStyle: FontStyle.italic)),
                   const Divider(height: 16),
                   Text('Start Time: ${formatTime(widget.trip.startTime)}'),
+                  if (widget.trip.arrivedAtPitTime != null) Text('Arrived at Pit: ${formatTime(widget.trip.arrivedAtPitTime!)}'),
+                  if (widget.trip.scaledOutTime != null) Text('Scaled Out: ${formatTime(widget.trip.scaledOutTime!)}'),
                   if (widget.trip.endTime != null) Text('Completion Time: ${formatTime(widget.trip.endTime!)}'),
                   Text('Total Elapsed: ${formatDuration(widget.trip.duration)}', style: const TextStyle(fontWeight: FontWeight.bold)),
                   if (widget.trip.lunchTaken)
@@ -1595,7 +1859,7 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Start: ${formatTime(act.startTime)} ${act.endTime != null && act.title != 'Equipment Swap' ? '➔ End: ${formatTime(act.endTime!)} (${formatDuration(act.duration)})' : ''}',
+                      'Start: ${formatTime(act.startTime)} ${act.endTime != null && act.title != 'Equipment Swap' && act.title != 'Arrived at Pit' && act.title != 'Scaled Out' ? '➔ End: ${formatTime(act.endTime!)} (${formatDuration(act.duration)})' : ''}',
                       style: const TextStyle(fontSize: 12, color: TexconColors.grayText),
                     ),
                     if (act.notes.isNotEmpty)
